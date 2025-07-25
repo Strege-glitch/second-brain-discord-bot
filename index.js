@@ -9,7 +9,7 @@ const client = new Client({
 });
 
 // Webhook URLs - using one unified webhook for better routing
-const N8N_WEBHOOK = process.env.N8N_WEBHOOK || 'https://YOUR-INSTANCE.app.n8n.cloud/webhook/discord-brain';
+const N8N_WEBHOOK = process.env.N8N_WEBHOOK || 'https://strege.app.n8n.cloud/webhook/discord-brain';
 
 // Command definitions for future-proofing
 const COMMANDS = {
