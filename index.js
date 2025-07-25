@@ -8,37 +8,23 @@ const client = new Client({
   ]
 });
 
-// Webhook URLs - using one unified webhook for better routing
-const N8N_WEBHOOK = process.env.N8N_WEBHOOK || 'https://strege.app.n8n.cloud/webhook/discord-brain';
+// Correct webhook URLs for your two workflows
+const SAVE_WEBHOOK = process.env.SAVE_WEBHOOK || 'https://strege.app.n8n.cloud/webhook/discord-brain-input';
+const QUERY_WEBHOOK = process.env.QUERY_WEBHOOK || 'https://strege.app.n8n.cloud/webhook/discord-brain';
 
-// Command definitions for future-proofing
-const COMMANDS = {
-  // Current commands
-  SAVE: ['!save', 'save:'],
-  ASK: ['!ask'],
-  COMPLETE: ['!complete'],
-  
-  // Future commands
-  UPDATE: ['!update'],
-  DELETE: ['!delete'],
-  SEARCH: ['!search', '!find'],
-  STATUS: ['!status'],
-  HELP: ['!help'],
-  EXPORT: ['!export'],
-  BACKUP: ['!backup'],
-  STATS: ['!stats'],
-  CLEAR: ['!clear'],
-  SETTINGS: ['!settings', '!config'],
-  
-  // Special patterns
-  MENTION: 'mention',
-  NUMBER_SELECTION: 'number',
-  VOICE_NOTE: 'voice'
-};
+// Command routing definitions
+const INPUT_COMMANDS = [
+  '!save', 'save:', '!complete', '!update', '!delete', '!clear', '!backup'
+];
+
+const QUERY_COMMANDS = [
+  '!ask', '!search', '!find', '!help', '!status', '!stats', '!export', '!settings', '!config'
+];
 
 client.on('ready', () => {
   console.log(`🧠 Second Brain Bot ready! Logged in as ${client.user.tag}`);
-  console.log(`📡 Webhook: ${N8N_WEBHOOK}`);
+  console.log(`📥 Input Webhook: ${SAVE_WEBHOOK}`);
+  console.log(`📤 Query Webhook: ${QUERY_WEBHOOK}`);
 });
 
 client.on('messageCreate', async (message) => {
@@ -48,34 +34,28 @@ client.on('messageCreate', async (message) => {
   const content = message.content.toLowerCase().trim();
   const originalContent = message.content.trim();
   
-  // Determine command type
-  const commandType = detectCommandType(content, message);
+  // Determine command type and routing
+  const routingInfo = determineRouting(content, message);
   
-  if (!commandType) return; // Not a command we handle
+  if (!routingInfo) return; // Not a command we handle
   
   // Add appropriate reaction for feedback
   const reactionMap = {
-    save: '💾',
-    ask: '🤔', 
-    complete: '🔍',
-    update: '✏️',
-    delete: '🗑️',
-    search: '🔍',
-    number: '🔢',
-    voice: '🎤'
+    save: '💾', ask: '🤔', complete: '🔍', update: '✏️', delete: '🗑️',
+    search: '🔍', number: '🔢', voice: '🎤', help: '❓', status: '📊'
   };
   
-  if (reactionMap[commandType]) {
-    await message.react(reactionMap[commandType]).catch(console.error);
+  if (reactionMap[routingInfo.commandType]) {
+    await message.react(reactionMap[routingInfo.commandType]).catch(console.error);
   }
   
-  // Send to n8n
+  // Send to appropriate n8n workflow
   try {
     const payload = {
       // Message data
       content: originalContent,
       contentLower: content,
-      commandType: commandType,
+      commandType: routingInfo.commandType,
       
       // Author data
       author: {
@@ -119,32 +99,35 @@ client.on('messageCreate', async (message) => {
       timestamp: new Date().toISOString()
     };
     
-    const response = await fetch(N8N_WEBHOOK, {
+    // Route to correct webhook
+    const webhookUrl = routingInfo.webhook;
+    const workflowType = routingInfo.workflow;
+    
+    console.log(`📡 Routing ${routingInfo.commandType} to ${workflowType} workflow`);
+    
+    const response = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'User-Agent': 'SecondBrain-Discord-Bot/1.0'
       },
       body: JSON.stringify(payload),
-      timeout: 10000 // 10 second timeout
+      timeout: 10000
     });
     
     if (response.ok) {
-      // Success reaction
       await message.react('✅').catch(console.error);
-      console.log(`✅ ${commandType.toUpperCase()} command processed: ${originalContent.substring(0, 50)}...`);
+      console.log(`✅ ${routingInfo.commandType.toUpperCase()} → ${workflowType}: ${originalContent.substring(0, 50)}...`);
     } else {
-      // Error reaction
       await message.react('❌').catch(console.error);
-      console.error(`❌ Webhook error: ${response.status} ${response.statusText}`);
+      console.error(`❌ ${workflowType} webhook error: ${response.status} ${response.statusText}`);
     }
     
   } catch (error) {
     console.error('❌ Error sending to n8n:', error);
     await message.react('❌').catch(console.error);
     
-    // Optional: Send error message to user for critical commands
-    if (['save', 'complete'].includes(commandType)) {
+    if (['save', 'complete'].includes(routingInfo.commandType)) {
       try {
         await message.reply('⚠️ Sorry, there was an error processing your command. Please try again.');
       } catch (replyError) {
@@ -154,22 +137,61 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Voice message handling
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
+// Helper function to determine routing
+function determineRouting(content, message) {
+  // Number selection (1-9) → Input workflow
+  if (/^[1-9]$/.test(content)) {
+    return {
+      commandType: 'number',
+      webhook: SAVE_WEBHOOK,
+      workflow: 'INPUT'
+    };
+  }
   
-  // Handle voice messages separately
-  if (message.attachments.size > 0) {
-    const voiceAttachment = message.attachments.find(att => 
-      att.contentType && att.contentType.startsWith('audio/')
-    );
-    
-    if (voiceAttachment) {
-      await message.react('🎤').catch(console.error);
-      // Voice processing will be handled by the main message handler
+  // Bot mention → Query workflow  
+  if (message.mentions.has(client.user)) {
+    return {
+      commandType: 'ask',
+      webhook: QUERY_WEBHOOK,
+      workflow: 'QUERY'
+    };
+  }
+  
+  // Voice messages → Input workflow
+  if (message.attachments.some(att => att.contentType?.startsWith('audio/'))) {
+    return {
+      commandType: 'voice',
+      webhook: SAVE_WEBHOOK,
+      workflow: 'INPUT'
+    };
+  }
+  
+  // Input workflow commands (content management)
+  for (const cmd of INPUT_COMMANDS) {
+    if (content.startsWith(cmd)) {
+      const commandType = cmd.replace('!', '').replace(':', '');
+      return {
+        commandType: commandType,
+        webhook: SAVE_WEBHOOK,
+        workflow: 'INPUT'
+      };
     }
   }
-});
+  
+  // Query workflow commands (information retrieval)  
+  for (const cmd of QUERY_COMMANDS) {
+    if (content.startsWith(cmd)) {
+      const commandType = cmd.replace('!', '').replace(':', '');
+      return {
+        commandType: commandType,
+        webhook: QUERY_WEBHOOK,
+        workflow: 'QUERY'
+      };
+    }
+  }
+  
+  return null; // Not a recognized command
+}
 
 // Error handling
 client.on('error', error => {
@@ -179,37 +201,6 @@ client.on('error', error => {
 process.on('unhandledRejection', error => {
   console.error('❌ Unhandled promise rejection:', error);
 });
-
-// Helper function to detect command type
-function detectCommandType(content, message) {
-  // Number selection (1-9)
-  if (/^[1-9]$/.test(content)) {
-    return 'number';
-  }
-  
-  // Bot mention
-  if (message.mentions.has(client.user)) {
-    return 'ask';
-  }
-  
-  // Voice messages
-  if (message.attachments.some(att => att.contentType?.startsWith('audio/'))) {
-    return 'voice';
-  }
-  
-  // Text commands
-  for (const [type, commands] of Object.entries(COMMANDS)) {
-    if (Array.isArray(commands)) {
-      for (const cmd of commands) {
-        if (content.startsWith(cmd)) {
-          return type.toLowerCase();
-        }
-      }
-    }
-  }
-  
-  return null; // Not a recognized command
-}
 
 // Graceful shutdown
 process.on('SIGINT', () => {
